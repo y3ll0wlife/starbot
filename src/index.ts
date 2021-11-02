@@ -1,8 +1,10 @@
-import { Client, Intents, Interaction, MessageEmbed, MessageReaction, PartialMessageReaction, TextChannel } from "discord.js";
+import { Client, Intents, Interaction, MessageReaction, PartialMessageReaction } from "discord.js";
 import sqlite3 from "sqlite3";
 import { get } from "./utils/database";
 import emojiRegex from "emoji-regex";
 import { config } from "dotenv";
+import { messageReactionAdd } from "./messageReactionAdd";
+import { messageReactionRemove } from "./messageReactionRemove";
 
 config({ path: `${__dirname}/../src/.env` });
 
@@ -19,108 +21,21 @@ db.serialize(() => {
 const client = new Client({ intents: [Intents.FLAGS.GUILDS, Intents.FLAGS.GUILD_MESSAGES, Intents.FLAGS.GUILD_MESSAGE_REACTIONS] });
 
 client.on("messageReactionAdd", async (messageReaction: MessageReaction | PartialMessageReaction) => {
-	const settings: { channelId: string; amount: number; customEmoji: string } = (await get(
-		db,
-		"SELECT channelId, amount, customEmoji  FROM starboard WHERE guildId = ?",
-		[messageReaction.message.guildId],
-	)) as any;
-
-	if (!settings) return;
-	if (settings.customEmoji === null) settings.customEmoji = "⭐";
-	if (messageReaction.count! < settings.amount) return;
-	if (settings.customEmoji !== messageReaction.emoji.name) {
-		if (settings.customEmoji !== `<:${messageReaction.emoji.name}:${messageReaction.emoji.id}>`) return;
-	}
-
-	const starboardChannel = (await client.channels.fetch(settings.channelId)) as TextChannel | undefined;
-	if (!starboardChannel) return;
-
-	const starboardPrevious = await starboardChannel.messages.fetch({ limit: 100 }); // @ts-ignore
-	const alreadyExists = starboardPrevious.find(m => m.embeds[0]?.footer?.text === `${messageReaction.message.id}`);
-
-	// @ts-ignore
-	let image: string | undefined = messageReaction.message.attachments.find(a => a.name?.endsWith(".png") || a.name.endsWith(".jpg"))?.attachment;
-
-	if (!image)
-		image = messageReaction.message.content?.match(
-			/((?:https?:\/\/)[a-z0-9]+(?:[-.][a-z0-9]+)*\.[a-z]{2,5}(?::[0-9]{1,5})?(?:\/[^ \n<>]*)\.(?:png|apng|jpg|gif))/g,
-		)?.[0];
-
-	const embed = new MessageEmbed()
-		.setColor("GOLD")
-		.setAuthor(messageReaction.message.author!.tag, messageReaction.message.author!.displayAvatarURL({ dynamic: true }))
-		.setFooter(`${messageReaction.message.id}`)
-		.setTimestamp();
-
-	if (messageReaction.message.content) embed.setDescription(messageReaction.message.content);
-	if (image) embed.setImage(image);
-
-	if (alreadyExists) {
-		alreadyExists.edit({
-			content: `${settings.customEmoji} **${messageReaction.count}** in <#${messageReaction.message.channel.id}>`,
-			embeds: [embed],
-		});
-
-		return;
-	}
-
-	starboardChannel.send({
-		content: `${settings.customEmoji} **${messageReaction.count}** in <#${messageReaction.message.channel.id}>`,
-		embeds: [embed],
-	});
+	messageReactionAdd(messageReaction, client, db);
 });
 
 client.on("messageReactionRemove", async (messageReaction: MessageReaction | PartialMessageReaction) => {
-	const settings: { channelId: string; customEmoji: string } = (await get(db, "SELECT channelId, customEmoji  FROM starboard WHERE guildId = ?", [
-		messageReaction.message.guildId,
-	])) as any;
-
-	if (!settings) return;
-	if (settings.customEmoji === null) settings.customEmoji = "⭐";
-	if (settings.customEmoji !== messageReaction.emoji.name) {
-		if (settings.customEmoji !== `<:${messageReaction.emoji.name}:${messageReaction.emoji.id}>`) return;
-	}
-
-	const starboardChannel = (await client.channels.fetch(settings.channelId)) as TextChannel | undefined;
-	if (!starboardChannel) return;
-
-	const starboardPrevious = await starboardChannel.messages.fetch({ limit: 100 }); // @ts-ignore
-	const alreadyExists = starboardPrevious.find(m => m.embeds[0]?.footer?.text === `${messageReaction.message.id}`);
-
-	// @ts-ignore
-	let image: string | undefined = messageReaction.message.attachments.find(a => a.name?.endsWith(".png") || a.name.endsWith(".jpg"))?.attachment;
-
-	if (!image)
-		image = messageReaction.message.content?.match(
-			/((?:https?:\/\/)[a-z0-9]+(?:[-.][a-z0-9]+)*\.[a-z]{2,5}(?::[0-9]{1,5})?(?:\/[^ \n<>]*)\.(?:png|apng|jpg|gif))/g,
-		)?.[0];
-
-	const embed = new MessageEmbed()
-		.setColor("GOLD")
-		.setAuthor(messageReaction.message.author!.tag, messageReaction.message.author!.displayAvatarURL({ dynamic: true }))
-		.setFooter(`${messageReaction.message.id}`)
-		.setTimestamp();
-
-	if (messageReaction.message.content) embed.setDescription(messageReaction.message.content);
-	if (image) embed.setImage(image);
-
-	if (alreadyExists) {
-		if (messageReaction.count === 0) {
-			alreadyExists.delete();
-			return;
-		}
-
-		alreadyExists.edit({
-			content: `${settings.customEmoji} **${messageReaction.count}** in <#${messageReaction.message.channel.id}>`,
-			embeds: [embed],
-		});
-
-		return;
-	}
+	messageReactionRemove(messageReaction, client, db);
 });
 
 client.on("interactionCreate", async (interaction: Interaction) => {
 	if (!interaction.isCommand()) return;
+
+	if (interaction.commandName === "invite")
+		return await interaction.reply({
+			ephemeral: true,
+			content: `https://discord.com/oauth2/authorize?client_id=${client.user!.id}&permissions=2147863552&scope=bot+applications.commands`,
+		});
 
 	if (!interaction.memberPermissions?.has("ADMINISTRATOR"))
 		return await interaction.reply({
@@ -191,6 +106,18 @@ client.on("interactionCreate", async (interaction: Interaction) => {
 
 client.on("ready", () => {
 	console.log(`[CLIENT] Logged in as ${client.user?.tag} (${client.user?.id})`);
+	client.user?.setPresence({
+		status: "online",
+		activities: [
+			{
+				name: "⭐",
+				type: "WATCHING",
+			},
+		],
+	});
 });
 
 client.login(process.env.TOKEN);
+
+process.on("unhandledRejection", (err: Error) => console.error(err));
+process.on("uncaughtException", (err: Error) => console.error(err));

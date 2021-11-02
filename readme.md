@@ -1,3 +1,8 @@
+# Starbot
+
+A Discord bot that posts the starred messages ⭐
+
+## Selfhosting slash commands
 ### Required slash commands
 ```json
 {
@@ -44,3 +49,9 @@
 }
 ```
 
+```json
+{
+  "name": "invite",
+  "description": "Create an invite for the bot"
+}
+```
